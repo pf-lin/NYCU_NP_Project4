@@ -48,3 +48,12 @@ Thumbs.db
 *.mov
 *.wmv
 
+# VSCode
+.vscode/
+
+# http server and socks server
+http_server
+socks_server
+
+# bin
+bin/
