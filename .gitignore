@@ -55,5 +55,8 @@ Thumbs.db
 http_server
 socks_server
 
+# cgi
+*.cgi
+
 # bin
 bin/
