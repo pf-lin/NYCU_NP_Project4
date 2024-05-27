@@ -1,8 +1,10 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/asio.hpp>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <utility>
 
@@ -46,14 +48,51 @@ class Session : public std::enable_shared_from_this<Session> {
                 if (!ec) {
                     parseSocksRequest();
 
-                    if (socksPacket.CD == SOCKS_CONNECT) {
-                        socksConnect();
+                    bool status = firewall();
+                    if (status) {
+                        if (socksPacket.CD == SOCKS_CONNECT) {
+                            socksConnect();
+                        }
+                        else if (socksPacket.CD == SOCKS_BIND) {
+                            socksBind();
+                        }
                     }
-                    else if (socksPacket.CD == SOCKS_BIND) {
-                        socksBind();
+                    else {
+                        doReject();
                     }
                 }
             });
+    }
+
+    bool firewall() {
+        string line;
+        ifstream file("./socks.conf");
+        bool isPermit = false;
+        while (getline(file, line)) {
+            vector<string> tokens;
+            boost::split(tokens, line, boost::is_any_of(" "));
+            if (tokens.size() == 3) {
+                if (tokens[0] == "permit") {
+                    tokens[2] = regex_replace(tokens[2], regex("\\."), "\\.");  // Replace . with \.
+                    tokens[2] = regex_replace(tokens[2], regex("\\*"), "\\d+"); // Replace * with \d+
+                    regex ip(tokens[2]);
+                    if (socksPacket.CD == SOCKS_CONNECT && tokens[1] == "c") {
+                        if (regex_match(socksPacket.DSTIP, ip)) {
+                            isPermit = true;
+                            break;
+                        }
+                    }
+                    else if (socksPacket.CD == SOCKS_BIND && tokens[1] == "b") {
+                        if (regex_match(socksPacket.DSTIP, ip)) {
+                            isPermit = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        file.close();
+        return isPermit;
     }
 
     void socksConnect() {
