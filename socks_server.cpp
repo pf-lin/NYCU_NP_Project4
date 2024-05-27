@@ -28,7 +28,8 @@ struct SocketsPacket {
 class Session : public std::enable_shared_from_this<Session> {
   public:
     Session(tcp::socket socket, boost::asio::io_context &io_context)
-        : clientSocket_(std::move(socket)), serverSocket_(io_context), resolver_(io_context) {}
+        : clientSocket_(std::move(socket)), serverSocket_(io_context),
+          resolver_(io_context), acceptor_(io_context, tcp::endpoint(tcp::v4(), 0)) {}
 
     void start() {
         doRead();
@@ -60,8 +61,10 @@ class Session : public std::enable_shared_from_this<Session> {
     }
 
     void socksBind() {
-        auto self(shared_from_this());
-        // TODO: Implement SOCKS BIND
+        acceptor_.listen();
+        unsigned short port = acceptor_.local_endpoint().port();
+        socksPacket.DSTPORT = to_string(port);
+        sendSocksReply(SOCKS_GRANTED, true); // first time reply (bind)
     }
 
     void doResolve(string host) {
@@ -94,12 +97,23 @@ class Session : public std::enable_shared_from_this<Session> {
             });
     }
 
+    void doAccept() {
+        auto self(shared_from_this());
+        acceptor_.async_accept(
+            [this, self](boost::system::error_code ec, tcp::socket socket) {
+                if (!ec) {
+                    serverSocket_ = std::move(socket);
+                    sendSocksReply(SOCKS_GRANTED); // second time reply (accept)
+                }
+            });
+    }
+
     void doReject() {
         sendSocksReply(SOCKS_REJECTED);
     }
 
     // Client (cgi) <-- SOCKS Server
-    void sendSocksReply(int reply) {
+    void sendSocksReply(int reply, bool isBind = false) {
         auto self(shared_from_this());
         memset(reply_, 0, REPLY_PACKET_SIZE);
         reply_[0] = 0;
@@ -113,10 +127,13 @@ class Session : public std::enable_shared_from_this<Session> {
         boost::asio::async_write(
             clientSocket_,
             boost::asio::buffer(reply_, REPLY_PACKET_SIZE),
-            [this, self](boost::system::error_code ec, std::size_t) {
+            [this, self, isBind](boost::system::error_code ec, std::size_t) {
                 if (!ec) {
-                    if (reply_[1] == SOCKS_GRANTED) {
-                        printSocksServerMessages();
+                    printSocksServerMessages();
+                    if (isBind) {
+                        doAccept();
+                    }
+                    else if (reply_[1] == SOCKS_GRANTED) {
                         doReadClient();
                         doReadServer();
                     }
@@ -212,6 +229,7 @@ class Session : public std::enable_shared_from_this<Session> {
     tcp::socket clientSocket_;
     tcp::socket serverSocket_;
     tcp::resolver resolver_;
+    tcp::acceptor acceptor_; // For SOCKS BIND
     enum { max_length = 1024 };
     unsigned char data_[max_length];
     unsigned char clientData_[max_length];
