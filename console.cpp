@@ -12,6 +12,11 @@ using boost::asio::ip::tcp;
 using namespace std;
 
 #define MAX_CONNECTION 5
+#define SOCKS_VERSION 4
+#define SOCKS_CONNECT 1
+#define SOCKS_GRANTED 90
+#define REQUEST_PACKET_SIZE 264
+#define REPLY_PACKET_SIZE 8
 
 const string contentType = "Content-Type: text/html\r\n\r\n";
 const string contentHead = R"(
@@ -81,7 +86,13 @@ struct ConnectionInfo {
     string file = "";
 };
 
+struct SocketsServerInfo {
+    string host = "";
+    string port = "";
+};
+
 vector<ConnectionInfo> connections(MAX_CONNECTION);
+SocketsServerInfo socketsServer;
 
 class Client : public std::enable_shared_from_this<Client> {
   public:
@@ -97,8 +108,8 @@ class Client : public std::enable_shared_from_this<Client> {
     void doResolve() {
         auto self(shared_from_this());
         resolver_.async_resolve(
-            connections[userIdx_].host,
-            connections[userIdx_].port,
+            socketsServer.host,
+            socketsServer.port,
             [this, self](boost::system::error_code ec, tcp::resolver::iterator it) {
                 if (!ec) {
                     doConnect(it);
@@ -112,7 +123,52 @@ class Client : public std::enable_shared_from_this<Client> {
             *it,
             [this, self](boost::system::error_code ec) {
                 if (!ec) {
-                    doRead();
+                    sendSocksRequest();
+                }
+            });
+    }
+
+    void sendSocksRequest() {
+        auto self(shared_from_this());
+        unsigned char requestPacket[REQUEST_PACKET_SIZE];
+        memset(requestPacket, 0, REQUEST_PACKET_SIZE);
+        requestPacket[0] = SOCKS_VERSION;                               // VN
+        requestPacket[1] = SOCKS_CONNECT;                               // CD
+        requestPacket[2] = stoi(connections[userIdx_].port) / 256;      // DSTPORT
+        requestPacket[3] = stoi(connections[userIdx_].port) % 256;      // DSTPORT
+        requestPacket[4] = 0;                                           // DSTIP
+        requestPacket[5] = 0;                                           // DSTIP
+        requestPacket[6] = 0;                                           // DSTIP
+        requestPacket[7] = 1;                                           // DSTIP
+        requestPacket[8] = 0;                                           // NULL
+        for (unsigned long int i = 0; i < connections[userIdx_].host.length(); i++) { // DOMAIN_NAME
+            requestPacket[9 + i] = connections[userIdx_].host[i];
+        }
+        requestPacket[REQUEST_PACKET_SIZE - 1] = 0; // NULL
+        boost::asio::async_write(
+            socket_,
+            boost::asio::buffer(requestPacket, REQUEST_PACKET_SIZE),
+            [this, self](boost::system::error_code ec, std::size_t) {
+                if (!ec) {
+                    readSocksReply();
+                }
+            });
+    }
+
+    void readSocksReply() {
+        auto self(shared_from_this());
+        memset(reply_, 0, REPLY_PACKET_SIZE);
+        socket_.async_read_some(
+            boost::asio::buffer(reply_, REPLY_PACKET_SIZE),
+            [this, self](boost::system::error_code ec, std::size_t length) {
+                if (!ec) {
+                    if (reply_[1] == SOCKS_GRANTED) {
+                        doRead();
+                    }
+                    else {
+                        cerr << "Socks connection failed" << endl;
+                        socket_.close();
+                    }
                 }
             });
     }
@@ -193,6 +249,7 @@ class Client : public std::enable_shared_from_this<Client> {
     fstream file_;
     enum { max_length = 1024 };
     char data_[max_length];
+    unsigned char reply_[REPLY_PACKET_SIZE];
 };
 
 void parseQueryString() {
@@ -211,6 +268,12 @@ void parseQueryString() {
             }
             else if (tmp2[0][0] == 'f') {
                 connections[i / 3].file = tmp2[1];
+            }
+            else if (tmp2[0] == "sh") {
+                socketsServer.host = tmp2[1];
+            }
+            else if (tmp2[0] == "sp") {
+                socketsServer.port = tmp2[1];
             }
         }
     }
