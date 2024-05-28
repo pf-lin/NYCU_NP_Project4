@@ -110,17 +110,17 @@ class Client : public std::enable_shared_from_this<Client> {
         resolver_.async_resolve(
             socketsServer.host,
             socketsServer.port,
-            [this, self](boost::system::error_code ec, tcp::resolver::iterator it) {
+            [this, self](boost::system::error_code ec, tcp::resolver::results_type endpoints) {
                 if (!ec) {
-                    doConnect(it);
+                    doConnect(endpoints);
                 }
             });
     }
 
-    void doConnect(tcp::resolver::iterator it) {
+    void doConnect(tcp::resolver::results_type endpoints) {
         auto self(shared_from_this());
         socket_.async_connect(
-            *it,
+            *endpoints,
             [this, self](boost::system::error_code ec) {
                 if (!ec) {
                     sendSocksRequest();
@@ -203,6 +203,9 @@ class Client : public std::enable_shared_from_this<Client> {
             boost::asio::buffer(command.c_str(), command.length()),
             [this, self](boost::system::error_code ec, std::size_t /*length*/) {
                 if (!ec) {
+                    if (!file_.is_open()) {
+                        socket_.close();
+                    }
                     doRead();
                 }
             });

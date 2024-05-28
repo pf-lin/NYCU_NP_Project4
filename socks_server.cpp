@@ -190,6 +190,9 @@ class Session : public std::enable_shared_from_this<Session> {
                 if (!ec) {
                     doWriteServer(length);
                 }
+                else {
+                    clientSocket_.close();
+                }
             });
     }
 
@@ -202,6 +205,9 @@ class Session : public std::enable_shared_from_this<Session> {
             [this, self](boost::system::error_code ec, std::size_t length) {
                 if (!ec) {
                     doWriteClient(length);
+                }
+                else {
+                    serverSocket_.close();
                 }
             });
     }
