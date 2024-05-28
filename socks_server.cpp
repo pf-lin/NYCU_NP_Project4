@@ -58,12 +58,13 @@ class Session : public std::enable_shared_from_this<Session> {
         resolver_.async_resolve(
             host,
             socksPacket.DSTPORT,
-            [this, self](boost::system::error_code ec, tcp::resolver::iterator it) {
+            [this, self](boost::system::error_code ec, tcp::resolver::results_type endpoints) {
                 if (!ec) {
+                    setDestinationIp(endpoints);
                     bool status = firewall();
                     if (status) {
                         if (socksPacket.CD == SOCKS_CONNECT) {
-                            socksConnect(it);
+                            socksConnect(endpoints);
                         }
                         else if (socksPacket.CD == SOCKS_BIND) {
                             socksBind();
@@ -111,10 +112,10 @@ class Session : public std::enable_shared_from_this<Session> {
     }
 
     // Client (cgi) --- SOCKS Server <===> Server (RAS/RWG)
-    void socksConnect(tcp::resolver::iterator it) {
+    void socksConnect(tcp::resolver::results_type endpoints) {
         auto self(shared_from_this());
         serverSocket_.async_connect(
-            *it,
+            *endpoints,
             [this, self](boost::system::error_code ec) {
                 if (!ec) {
                     sendSocksReply(SOCKS_GRANTED);
@@ -250,6 +251,10 @@ class Session : public std::enable_shared_from_this<Session> {
             return socksPacket.DOMAIN_NAME;
         }
         return socksPacket.DSTIP;
+    }
+
+    void setDestinationIp(tcp::resolver::results_type endpoints) {
+        socksPacket.DSTIP = endpoints->endpoint().address().to_string();
     }
 
     void printSocksServerMessages() {
