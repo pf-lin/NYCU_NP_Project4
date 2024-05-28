@@ -47,11 +47,23 @@ class Session : public std::enable_shared_from_this<Session> {
             [this, self](boost::system::error_code ec, std::size_t length) {
                 if (!ec) {
                     parseSocksRequest();
+                    doResolve();
+                }
+            });
+    }
 
+    void doResolve() {
+        auto self(shared_from_this());
+        string host = getHost();
+        resolver_.async_resolve(
+            host,
+            socksPacket.DSTPORT,
+            [this, self](boost::system::error_code ec, tcp::resolver::iterator it) {
+                if (!ec) {
                     bool status = firewall();
                     if (status) {
                         if (socksPacket.CD == SOCKS_CONNECT) {
-                            socksConnect();
+                            socksConnect(it);
                         }
                         else if (socksPacket.CD == SOCKS_BIND) {
                             socksBind();
@@ -60,6 +72,9 @@ class Session : public std::enable_shared_from_this<Session> {
                     else {
                         doReject();
                     }
+                }
+                else {
+                    doReject();
                 }
             });
     }
@@ -95,34 +110,8 @@ class Session : public std::enable_shared_from_this<Session> {
         return isPermit;
     }
 
-    void socksConnect() {
-        doResolve(getHost());
-    }
-
-    void socksBind() {
-        acceptor_.listen();
-        unsigned short port = acceptor_.local_endpoint().port();
-        socksPacket.DSTPORT = to_string(port);
-        sendSocksReply(SOCKS_GRANTED, true); // first time reply (bind)
-    }
-
-    void doResolve(string host) {
-        auto self(shared_from_this());
-        resolver_.async_resolve(
-            host,
-            socksPacket.DSTPORT,
-            [this, self, host](boost::system::error_code ec, tcp::resolver::iterator it) {
-                if (!ec) {
-                    doConnect(it);
-                }
-                else {
-                    doReject();
-                }
-            });
-    }
-
     // Client (cgi) --- SOCKS Server <===> Server (RAS/RWG)
-    void doConnect(tcp::resolver::iterator it) {
+    void socksConnect(tcp::resolver::iterator it) {
         auto self(shared_from_this());
         serverSocket_.async_connect(
             *it,
@@ -134,6 +123,13 @@ class Session : public std::enable_shared_from_this<Session> {
                     doReject();
                 }
             });
+    }
+
+    void socksBind() {
+        acceptor_.listen();
+        unsigned short port = acceptor_.local_endpoint().port();
+        socksPacket.DSTPORT = to_string(port);
+        sendSocksReply(SOCKS_GRANTED, true); // first time reply (bind)
     }
 
     void doAccept() {
