@@ -6,6 +6,7 @@
 #include <memory>
 #include <regex>
 #include <sstream>
+#include <sys/shm.h>
 #include <utility>
 
 using boost::asio::ip::tcp;
@@ -18,6 +19,9 @@ using namespace std;
 #define SOCKS_REJECTED 91
 #define REQUEST_PACKET_SIZE 264
 #define REPLY_PACKET_SIZE 8
+#define SHMKEY_CONNECTION_INFO 7890
+#define MAX_CONNECTION 10
+#define MAX_CONNECTION_TIMES 3
 
 struct SocketsPacket {
     int VN;
@@ -26,6 +30,15 @@ struct SocketsPacket {
     string DSTIP;
     string DOMAIN_NAME;
 };
+
+struct ConnectionInfo {
+    char ip[16];
+    int times;
+};
+
+// share memory
+int shmid_connection = -1;
+ConnectionInfo *connectionList;
 
 class Session : public std::enable_shared_from_this<Session> {
   public:
@@ -62,7 +75,7 @@ class Session : public std::enable_shared_from_this<Session> {
                 if (!ec) {
                     setDestinationIp(endpoints);
                     bool status = firewall();
-                    if (status) {
+                    if (status && checkConnection()) {
                         if (socksPacket.CD == SOCKS_CONNECT) {
                             socksConnect(endpoints);
                         }
@@ -78,6 +91,27 @@ class Session : public std::enable_shared_from_this<Session> {
                     doReject();
                 }
             });
+    }
+
+    bool checkConnection() {
+        string srcIp = clientSocket_.remote_endpoint().address().to_string();
+        for (int i = 0; i < MAX_CONNECTION; i++) {
+            if (strcmp(connectionList[i].ip, srcIp.c_str()) == 0) { // Connection IP exists
+                connectionList[i].times++;
+                cout << "Connection IP: " << connectionList[i].ip << " times: " << connectionList[i].times << endl;
+                if (connectionList[i].times > MAX_CONNECTION_TIMES) {
+                    return false;
+                }
+                break;
+            }
+            else if (strlen(connectionList[i].ip) == 0) { // Connection IP not exists
+                strcpy(connectionList[i].ip, srcIp.c_str());
+                connectionList[i].times++;
+                cout << "Connection IP: " << connectionList[i].ip << " times: " << connectionList[i].times << endl;
+                break;
+            }
+        }
+        return true;
     }
 
     bool firewall() {
@@ -288,6 +322,8 @@ class Server {
   public:
     Server(boost::asio::io_context &io_context, short port)
         : acceptor_(io_context, tcp::endpoint(tcp::v4(), port)), io_context_(io_context) {
+        createSharedMemory();
+        initConnectionList();
         doAccept();
     }
 
@@ -309,6 +345,24 @@ class Server {
                     }
                 }
             });
+    }
+
+    void createSharedMemory() {
+        shmid_connection = shmget(SHMKEY_CONNECTION_INFO, sizeof(ConnectionInfo) * MAX_CONNECTION, IPC_CREAT | 0666);
+        if (shmid_connection < 0) {
+            cerr << "Error: failed to create shared memory for connection information" << endl;
+        }
+        connectionList = (ConnectionInfo *)shmat(shmid_connection, NULL, 0);
+        if (connectionList == (ConnectionInfo *)-1) {
+            cerr << "Error: failed to attach shared memory for connection information" << endl;
+        }
+    }
+
+    void initConnectionList() {
+        for (int i = 0; i < MAX_CONNECTION; i++) {
+            memset(connectionList[i].ip, '\0', 16);
+            connectionList[i].times = 0;
+        }
     }
 
     tcp::acceptor acceptor_;
